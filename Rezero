@@ -1,0 +1,371 @@
+-- [[ 1. BOOTLOADER SEGURO ]] --
+print(">>> REVISÃO FINAL V54 - RESPAWN AGRESSIVO E SIMPLIFICAÇÃO <<<")
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+local Players = game:GetService("Players")
+local Lighting = game:GetService("Lighting")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local player = Players.LocalPlayer
+local GuiParent = game:GetService("CoreGui")
+
+-- [[ 2. LIMPEZA ]] --
+getgenv().ReZeroData = nil 
+for _, v in pairs(GuiParent:GetChildren()) do if v.Name:match("ReZero") then v:Destroy() end end
+local function ClearEffects()
+	for _, v in pairs(Lighting:GetChildren()) do if v.Name:match("ReZero") then v:Destroy() end end
+end
+ClearEffects()
+
+-- [[ 3. VARIÁVEIS GLOBAIS ]] --
+getgenv().ReZeroData = {
+	SelectedChar = nil, 
+	DeathCount = 0,
+	LastStep = nil,   -- PONTO DE RESPAWN AUTOMÁTICO
+	TraumaActive = false,
+	SoulPartner = nil,
+	ForceTrauma = false
+}
+
+-- =========================================================================
+-- UTILITÁRIOS BASE
+-- =========================================================================
+local function PlaySoundSafe(id, parent, vol)
+	task.spawn(function()
+		pcall(function()
+			local s = Instance.new("Sound", parent or workspace)
+			local cleanID = tostring(id):gsub("rbxassetid://", ""):gsub("%D", "")
+			s.SoundId = "rbxassetid://" .. cleanID
+			s.Volume = vol or 1
+			s:Play()
+			game.Debris:AddItem(s, 10)
+		end)
+	end)
+end
+
+local function MakeDraggable(gui)
+	local dragging, dragInput, dragStart, startPos
+	gui.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true; dragStart = input.Position; startPos = gui.Position
+			input.Changed:Connect(function() if input.UserInputState == Enum.UserInputState.End then dragging = false end end)
+		end
+	end)
+	gui.InputChanged:Connect(function(input) if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then dragInput = input end end)
+	UserInputService.InputChanged:Connect(function(input)
+		if input == dragInput and dragging then
+			local delta = input.Position - dragStart
+			gui.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+		end
+	end)
+end
+
+-- =========================================================================
+-- EFEITOS VISUAIS
+-- =========================================================================
+local function StartCameraShake(duration, intensity)
+	task.spawn(function()
+		local startTime = tick()
+		while tick() - startTime < duration do
+			if player.Character and player.Character:FindFirstChild("Humanoid") then
+				local x = math.random(-100, 100) / 100 * intensity
+				local y = math.random(-100, 100) / 100 * intensity
+				player.Character.Humanoid.CameraOffset = Vector3.new(x, y, 0)
+			end
+			RunService.RenderStepped:Wait()
+		end
+		if player.Character and player.Character:FindFirstChild("Humanoid") then player.Character.Humanoid.CameraOffset = Vector3.new(0,0,0) end
+	end)
+end
+
+local function PlayNormalDeath()
+	PlaySoundSafe(1526362534, workspace, 3)
+	local blur = Instance.new("BlurEffect", Lighting); blur.Name="ReZeroBlur"; blur.Size=0
+	local cc = Instance.new("ColorCorrectionEffect", Lighting); cc.Name="ReZeroCC"; cc.Saturation=-1
+	TweenService:Create(blur, TweenInfo.new(0.5), {Size = 24}):Play()
+	local gui = game:GetService("CoreGui"):FindFirstChild("ReZeroFade")
+	if not gui then gui=Instance.new("ScreenGui", GuiParent); gui.Name="ReZeroFade"; gui.IgnoreGuiInset=true; gui.DisplayOrder=999; local f=Instance.new("Frame",gui); f.Name="O"; f.Size=UDim2.new(1,0,1,0); f.BackgroundColor3=Color3.new(0,0,0); f.BackgroundTransparency=1 end
+	local f = gui:FindFirstChild("O")
+	if f then f.BackgroundColor3 = Color3.new(0,0,0); TweenService:Create(f, TweenInfo.new(0.5), {BackgroundTransparency = 0}):Play() end
+end
+
+local function PlayTraumaDeath()
+	getgenv().ReZeroData.TraumaActive = true
+	PlaySoundSafe(91884311292810, workspace, 8)
+	StartCameraShake(6, 0.8)
+	local blur = Instance.new("BlurEffect", Lighting); blur.Name="ReZeroBlur"; blur.Size=0; TweenService:Create(blur, TweenInfo.new(0.2), {Size = 40}):Play()
+	local gui = game:GetService("CoreGui"):FindFirstChild("ReZeroFade")
+	if not gui then gui=Instance.new("ScreenGui", GuiParent); gui.Name="ReZeroFade"; gui.IgnoreGuiInset=true; gui.DisplayOrder=999; local f=Instance.new("Frame",gui); f.Name="O"; f.Size=UDim2.new(1,0,1,0); f.BackgroundColor3=Color3.new(0,0,0); f.BackgroundTransparency=1 end
+	local f = gui:FindFirstChild("O")
+	if f then
+		TweenService:Create(f, TweenInfo.new(0.5), {BackgroundTransparency = 0.1}):Play()
+		task.spawn(function()
+			local start = tick()
+			while tick() - start < 6 and getgenv().ReZeroData.TraumaActive do
+				f.BackgroundColor3 = Color3.fromRGB(80, 0, 120); TweenService:Create(f, TweenInfo.new(0.5), {BackgroundColor3 = Color3.fromRGB(150, 0, 0)}):Play(); task.wait(0.5)
+				TweenService:Create(f, TweenInfo.new(0.5), {BackgroundColor3 = Color3.fromRGB(80, 0, 120)}):Play(); task.wait(0.5)
+			end
+		end)
+	end
+end
+
+local function PlayRebirthEffects(root, exactPosition)
+	getgenv().ReZeroData.TraumaActive = false 
+	for _, v in pairs(Lighting:GetChildren()) do if v.Name=="ReZeroBlur" or v.Name=="ReZeroCC" then v:Destroy() end end
+	
+	local gui = game:GetService("CoreGui"):FindFirstChild("ReZeroFade")
+	if gui and gui:FindFirstChild("O") then gui.O.BackgroundColor3=Color3.new(0,0,0); gui.O.BackgroundTransparency=0 end 
+	
+	PlaySoundSafe(18597544476, root, 5)
+	
+	local spawnPos = exactPosition or root.CFrame
+	local p = Instance.new("Part"); p.Anchored=true; p.CanCollide=false; p.Shape="Ball"; p.Material="Neon"; p.Color=Color3.new(1,1,1); p.Size=Vector3.new(1,1,1); p.CFrame=spawnPos; p.Parent=workspace
+	task.spawn(function() for i=1,30 do if p.Parent then p.Size=p.Size+Vector3.new(1.5,1.5,1.5); p.Transparency=i/30 end; task.wait(0.01) end; p:Destroy() end)
+
+	task.spawn(function()
+		local blur = Instance.new("BlurEffect", Lighting); blur.Name="ReZeroBlur"; blur.Size=24
+		local cc = Instance.new("ColorCorrectionEffect", Lighting); cc.Name="ReZeroCC"; cc.Saturation=-1
+		TweenService:Create(blur, TweenInfo.new(1.5), {Size = 0}):Play()
+		TweenService:Create(cc, TweenInfo.new(1.5), {Saturation = 0}):Play()
+		if gui and gui:FindFirstChild("O") then TweenService:Create(gui.O, TweenInfo.new(1.0), {BackgroundTransparency = 1}):Play() end
+		task.wait(1.0); blur:Destroy(); cc:Destroy()
+	end)
+end
+
+-- NOVO EFEITO: BRUXA "AISHITERU" (CORAÇÃO PULSANTE CINEMATOGRÁFICO)
+local function PlayWitchEffects(root)
+	local sg = Instance.new("ScreenGui", GuiParent); sg.Name="ReZeroWitchFX"; sg.DisplayOrder = 1000
+	
+	local vignette = Instance.new("ImageLabel", sg); vignette.Size=UDim2.new(1,0,1,0); vignette.BackgroundTransparency=1; vignette.Image = "rbxassetid://4510526363"; vignette.ImageColor3 = Color3.fromRGB(80, 0, 120); vignette.ImageTransparency = 0.5 -- Vinheta roxa
+	
+	-- Imagem de Coração Pulsante (ID genérico de coração)
+	local heart = Instance.new("ImageLabel", sg); heart.Image = "rbxassetid://5404543788"; 
+	heart.Size=UDim2.new(0,200,0,200); heart.Position=UDim2.new(0.5,-100,0.5,-100); 
+	heart.BackgroundTransparency=1; heart.ImageColor3=Color3.fromRGB(150,0,200); heart.ImageTransparency=0.8
+	
+	-- Texto "Aishiteru"
+	local text = Instance.new("TextLabel", sg); text.Text = "愛してる"; text.Size=UDim2.new(1,0,0.2,0); text.Position = UDim2.new(0,0,0.4,0); text.BackgroundTransparency = 1; text.Font = Enum.Font.GothamBlack; text.TextColor3 = Color3.fromRGB(255, 50, 50); text.TextTransparency = 1; text.TextScaled = true
+
+	-- Animação de Batida (CORAÇÃO PULSANTE CINEMATOGRÁFICO)
+	task.spawn(function()
+		local start = tick()
+		while tick() - start < 4 and GuiParent:FindFirstChild(sg.Name) do
+			-- PULSO CINEMATOGRÁFICO (escala)
+			TweenService:Create(heart, TweenInfo.new(0.2, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), 
+				{ImageTransparency = 0.3, Size = UDim2.new(0,300,0,300), Position = UDim2.new(0.5,-150,0.5,-150)}):Play()
+			task.wait(0.2)
+			TweenService:Create(heart, TweenInfo.new(0.2, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), 
+				{ImageTransparency = 0.8, Size = UDim2.new(0,200,0,200), Position = UDim2.new(0.5,-100,0.5,-100)}):Play()
+			
+			-- Piscar do texto
+			TweenService:Create(text, TweenInfo.new(0.5), {TextTransparency = 0}):Play(); 
+			task.wait(0.5)
+			TweenService:Create(text, TweenInfo.new(0.5), {TextTransparency = 1}):Play(); 
+			task.wait(0.5)
+		end
+		sg:Destroy()
+	end)
+	
+	PlaySoundSafe(91884311292810, root, 8) -- ID DE SOM BRUXA (9 no primeiro número)
+	PlaySoundSafe(7188240609, root, 3) -- Som adicional
+end
+
+-- =========================================================================
+-- SISTEMA SOUL LINK
+-- =========================================================================
+local function LoadSoulLinkSystem()
+	local gui = Instance.new("ScreenGui", GuiParent); gui.Name = "ReZeroSoulLink"; gui.DisplayOrder = 10
+	local btnLink = Instance.new("TextButton", gui); btnLink.Text="🔗"; btnLink.Size=UDim2.new(0,45,0,45); btnLink.Position=UDim2.new(0.9,0,0.55,0); btnLink.BackgroundColor3=Color3.fromRGB(180,100,255); btnLink.TextColor3=Color3.new(1,1,1); Instance.new("UICorner",btnLink).CornerRadius=UDim.new(1,0); MakeDraggable(btnLink)
+	
+	local frame = Instance.new("Frame", gui); frame.Size=UDim2.new(0,200,0,250); frame.Position=UDim2.new(0.5,-100,0.5,-125); frame.BackgroundColor3=Color3.fromRGB(30,30,30); frame.Visible=false; Instance.new("UICorner",frame).CornerRadius=UDim.new(0,10)
+	local scroll = Instance.new("ScrollingFrame", frame); scroll.Size=UDim2.new(0.9,0,0.7,0); scroll.Position=UDim2.new(0.05,0,0.15,0); scroll.BackgroundTransparency=1; Instance.new("UIListLayout", scroll).Padding=UDim.new(0,5)
+	local btnClose = Instance.new("TextButton", frame); btnClose.Text="FECHAR"; btnClose.Size=UDim2.new(0.9,0,0.1,0); btnClose.Position=UDim2.new(0.05,0,0.88,0); btnClose.BackgroundColor3=Color3.fromRGB(200,50,50); btnClose.TextColor3=Color3.new(1,1,1)
+
+	task.spawn(function()
+		while gui.Parent do
+			pcall(function()
+				task.wait(0.5)
+				local pName = getgenv().ReZeroData.SoulPartner
+				if pName then
+					local partner = Players:FindFirstChild(pName)
+					if partner and partner.Character and partner.Character:FindFirstChild("Humanoid") then
+						if partner.Character.Humanoid.Health <= 0 and player.Character and player.Character:FindFirstChild("Humanoid") and player.Character.Humanoid.Health > 0 then
+							getgenv().ReZeroData.ForceTrauma = true
+							player.Character.Humanoid.Health = 0
+							repeat task.wait(1) until partner.Character and partner.Character:FindFirstChild("Humanoid") and partner.Character.Humanoid.Health > 0
+						end
+					elseif not partner then
+						getgenv().ReZeroData.SoulPartner = nil
+					end
+					btnLink.BackgroundColor3 = Color3.fromRGB(0,255,100)
+				else
+					btnLink.BackgroundColor3 = Color3.fromRGB(180,100,255)
+				end
+			end)
+		end
+	end)
+	
+	local function UpdateList()
+		for _, v in pairs(scroll:GetChildren()) do if v:IsA("TextButton") then v:Destroy() end end
+		local c = 0
+		for _, p in pairs(Players:GetPlayers()) do
+			if p ~= player then
+				c=c+1
+				local b = Instance.new("TextButton", scroll); b.Text=p.Name; b.Size=UDim2.new(1,0,0,30); b.BackgroundColor3=Color3.fromRGB(60,60,60); b.TextColor3=Color3.new(1,1,1)
+				b.Activated:Connect(function()
+					getgenv().ReZeroData.SoulPartner = p.Name
+					frame.Visible = false
+					game.StarterGui:SetCore("SendNotification", {Title="CONTRATO", Text="Vida vinculada a "..p.Name, Duration=3})
+				end)
+			end
+		end
+		scroll.CanvasSize = UDim2.new(0,0,0,c*35)
+	end
+	
+	btnLink.Activated:Connect(function() frame.Visible = not frame.Visible; if frame.Visible then UpdateList() end end)
+	btnClose.Activated:Connect(function() frame.Visible = false end)
+end
+
+-- =========================================================================
+-- BOTÕES EXTRAS (SIMPLIFICADO)
+-- =========================================================================
+local function LoadExtraButtons()
+	local gui = Instance.new("ScreenGui", GuiParent); gui.Name="ReZeroMobileSkills"; gui.DisplayOrder = 50
+	
+	-- Victory Button (Mantido)
+	local b1 = Instance.new("TextButton", gui); b1.Text="✌️"; b1.Size=UDim2.new(0,45,0,45); b1.Position=UDim2.new(0.9,0,0.65,0); b1.BackgroundColor3=Color3.fromRGB(255,170,0); Instance.new("UICorner",b1).CornerRadius=UDim.new(1,0); MakeDraggable(b1)
+	local t1, s1
+	b1.Activated:Connect(function()
+		if t1 and t1.IsPlaying then t1:Stop(); if s1 then s1:Stop() end else
+			local c=player.Character; PlaySoundSafe(126842980122106, c.HumanoidRootPart, 5)
+			local a=Instance.new("Animation"); a.AnimationId="rbxassetid://507770239"; t1=c.Humanoid.Animator:LoadAnimation(a); t1.Looped=true; t1:Play()
+		end
+	end)
+	
+	-- ATENÇÃO: BOTÕES SAVE E LOAD REMOVIDOS PARA MANTER O RESPAWN SIMPLES
+end
+
+
+-- =========================================================================
+-- KIT SUBARU (RESPAWN REFORÇADO)
+-- =========================================================================
+local function LoadSubaruKit()
+	LoadExtraButtons()
+	LoadSoulLinkSystem()
+
+	local function CreateHUD()
+		if game:GetService("CoreGui"):FindFirstChild("ReZeroHUD") then return end
+		local hud = Instance.new("ScreenGui", game:GetService("CoreGui")); hud.Name="ReZeroHUD"; hud.ResetOnSpawn=false
+		local txt = Instance.new("TextLabel", hud); txt.Name="Counter"
+		txt.Text="Returns by Death: "..getgenv().ReZeroData.DeathCount
+		txt.Size=UDim2.new(0,300,0,30); txt.Position=UDim2.new(0.02,0,0.05,0); txt.BackgroundTransparency=1
+		txt.Font=Enum.Font.GothamBlack; txt.TextColor3=Color3.fromRGB(150,0,255); txt.TextScaled=true
+		task.spawn(function() while txt.Parent do TweenService:Create(txt, TweenInfo.new(1),{TextTransparency=0.5}):Play(); task.wait(1); TweenService:Create(txt, TweenInfo.new(1),{TextTransparency=0}):Play(); task.wait(1) end end)
+	end
+	CreateHUD()
+
+	local function onSubaruSpawn(char)
+		local root = char:WaitForChild("HumanoidRootPart", 10)
+		local hum = char:WaitForChild("Humanoid", 10)
+		if not root or not hum then return end
+
+		local hud = game:GetService("CoreGui"):FindFirstChild("ReZeroHUD")
+		if hud and hud:FindFirstChild("Counter") then hud.Counter.Text="Returns by Death: "..getgenv().ReZeroData.DeathCount else CreateHUD() end
+
+		local ff = Instance.new("ForceField", char); ff.Visible=false; game.Debris:AddItem(ff, 1.5)
+
+		-- RESPAWN AGRESSIVO (FORÇA A POSIÇÃO)
+		if getgenv().ReZeroData.LastStep then
+			PlayRebirthEffects(root, getgenv().ReZeroData.LastStep)
+			
+			task.spawn(function()
+				local lastPos = getgenv().ReZeroData.LastStep
+				local start = tick()
+				-- Tenta forçar o respawn por 3 segundos para vencer o spawn do mapa
+				while tick() - start < 3 and root.Parent do
+					pcall(function()
+						root.CFrame = lastPos 
+						root.AssemblyLinearVelocity = Vector3.zero
+					end)
+					task.wait(0.05) -- Espera bem pouco para ser agressivo
+				end
+			end)
+		else
+			PlayRebirthEffects(root, root.CFrame)
+		end
+
+		-- AURA
+		task.spawn(function()
+			task.wait(0.5)
+			if not root:FindFirstChild("WitchFireEffect") then
+				local fire = Instance.new("Fire", root); fire.Name="WitchFireEffect"; fire.Color=Color3.fromRGB(85,0,127); fire.SecondaryColor=Color3.fromRGB(170,85,255); fire.Size=6; fire.Heat=9
+				local light = Instance.new("PointLight", root); light.Name="WitchLight"; light.Color=Color3.fromRGB(170,85,255); light.Range=12; light.Brightness=2
+				task.delay(6, function() if fire.Parent then TweenService:Create(fire, TweenInfo.new(1.5), {Size=0}):Play(); game.Debris:AddItem(fire,1.6) end; if light.Parent then light:Destroy() end end)
+			end
+		end)
+
+		-- SAVE SYSTEM (A cada 0.5s - ESTE É O SEU NOVO 'SPAWNPOINT')
+		task.spawn(function()
+			while hum.Health > 0 and root do
+				local pos = root.CFrame
+				task.wait(0.5)
+				if hum.Health > 0 and root then
+					getgenv().ReZeroData.LastStep = pos
+				end
+			end
+		end)
+
+		-- MORTE
+		hum.Died:Connect(function()
+			getgenv().ReZeroData.DeathCount = getgenv().ReZeroData.DeathCount + 1
+			local count = getgenv().ReZeroData.DeathCount
+			
+			if (count > 0 and count % 10 == 0) or getgenv().ReZeroData.ForceTrauma then
+				PlayTraumaDeath()
+				getgenv().ReZeroData.ForceTrauma = false
+				task.wait(6) 
+			else
+				PlayNormalDeath()
+				task.wait(1.5)
+			end
+			player:LoadCharacter()
+		end)
+	end
+	
+	if getgenv().SubaruConn then getgenv().SubaruConn:Disconnect() end
+	getgenv().SubaruConn = player.CharacterAdded:Connect(onSubaruSpawn)
+	if player.Character then onSubaruSpawn(player.Character) end
+end
+
+-- =========================================================================
+-- KIT REINHARD (Mantido)
+-- =========================================================================
+local function LoadReinhardKit()
+	local mg = Instance.new("ScreenGui", GuiParent); mg.Name="ReZeroMobileSkills"; mg.DisplayOrder = 50
+	local function mk(t,c,p,f)
+		local b = Instance.new("TextButton", mg); b.Text=t; b.Size=UDim2.new(0,60,0,60); b.Position=p; b.BackgroundColor3=c; b.TextColor3=Color3.new(1,1,1); Instance.new("UICorner",b).CornerRadius=UDim.new(1,0); b.Activated:Connect(f); MakeDraggable(b)
+	end
+	mk("⚔️", Color3.fromRGB(0,255,255), UDim2.new(0.8,0,0.5,0), function()
+		local c=player.Character; if not c then return end; local s=Instance.new("Part",workspace); s.CFrame=c.HumanoidRootPart.CFrame*CFrame.new(0,0,-5); s.Size=Vector3.new(15,1,5); s.Color=Color3.fromRGB(0,255,255); s.Material="Neon"; s.CanCollide=false; local v=Instance.new("BodyVelocity",s); v.Velocity=c.HumanoidRootPart.CFrame.LookVector*100; v.MaxForce=Vector3.new(math.huge,math.huge,math.huge); game.Debris:AddItem(s,1)
+	end)
+	mk("🌪️", Color3.fromRGB(255,50,50), UDim2.new(0.9,0,0.4,0), function()
+		local c=player.Character; local r=c.HumanoidRootPart; local old=r.CFrame; for _,v in pairs(c:GetDescendants()) do if v:IsA("BasePart") then v.Transparency=1 end end
+		local t=tick(); local con; con=game:GetService("RunService").Stepped:Connect(function() if tick()-t>1.2 then con:Disconnect() return end; local tg,dist=nil,50; for _,v in pairs(Players:GetPlayers()) do if v~=player and v.Character and v.Character:FindFirstChild("HumanoidRootPart") then local d=(v.Character.HumanoidRootPart.Position-old.Position).Magnitude; if d<dist then tg=v.Character.HumanoidRootPart; dist=d end end end; if tg then r.CFrame=tg.CFrame; r.AssemblyAngularVelocity=Vector3.new(0,100000,0) else r.CFrame=r.CFrame*CFrame.Angles(0,10,0) end end)
+		task.wait(1.2); r.CFrame=old; r.AssemblyAngularVelocity=Vector3.zero; for _,v in pairs(c:GetDescendants()) do if v:IsA("BasePart") and v.Name~="HumanoidRootPart" then v.Transparency=0 end end
+	end)
+	local function onRein(c) c:WaitForChild("Humanoid",10).WalkSpeed=35 end
+	if getgenv().ReinConn then getgenv().ReinConn:Disconnect() end
+	getgenv().ReinConn = player.CharacterAdded:Connect(onRein)
+	if player.Character then onRein(player.Character) end
+end
+
+-- =========================================================================
+-- MENU INICIAL
+-- =========================================================================
+local function CreateMenu()
+	if GuiParent:FindFirstChild("ReZeroSelector") then return end
+	local sg = Instance.new("ScreenGui", GuiParent); sg.Name="ReZeroSelector"; sg.DisplayOrder=100
+	local f = Instance.new("Frame", sg); f.Size=UDim2.new(0,400,0,250); f.Position=UDim2.new(0.5,-200,0.5,-125); f.BackgroundColor3=Color3.fromRGB(20,20,20); Instance.new("UICorner",f).CornerRadius=UDim.new(0,10)
+	local t = Instance.new("TextLabel", f); t.Text="RE:ZERO SELECTION"; t.Size=UDim2.new(1,0,0.2,0); t.BackgroundTransparency=1; t.TextColor3=Color3.new(1,1,1); t.Font=Enum.Font.GothamBlack; t.TextSize=22
+	local b1 = Instance.new("TextButton", f); b1.Text="SUBARU"; b1.Size=UDim2.new(0.4,0,0.6,0); b1.Position=UDim2.new(0.05,0,0.3,0); b1.BackgroundColor3=Color3.fromRGB(80,0,120)
